@@ -1,95 +1,166 @@
 #include "shell.h"
 
 /**
-* _getline - read one line from the prompt.
-* @data: struct for the program's data
-*
-* Return: reading counting bytes.
-*/
-int _getline(data_of_program *data)
+ * input_buf - buffers chained commands
+ * @info: parameter struct
+ * @buf: address of buffer
+ * @len: address of len var
+ *
+ * Return: bytes read
+ */
+ssize_t input_buf(info_t *info, char **buf, size_t *len)
 {
-char buff[BUFFER_SIZE] = {'\0'};
-static char *array_commands[10] = {NULL};
-static char array_operators[10] = {'\0'};
-ssize_t bytes_read, i = 0;
+ssize_t r = 0;
+size_t len_p = 0;
 
-/* check if doesnot exist more commands in the array */
-/* and checks the logical operators */
-if (!array_commands[0] || (array_operators[0] == '&' && errno != 0) ||
-(array_operators[0] == '|' && errno == 0))
+if (!*len)
 {
-/*free the memory allocated in the array if it exists */
-for (i = 0; array_commands[i]; i++)
+free(*buf);
+*buf = NULL;
+signal(SIGINT, sigintHandler);
+r = getline(buf, &len_p, stdin);
+r = _getline(info, buf, &len_p);
+
+if (r > 0)
 {
-free(array_commands[i]);
-array_commands[i] = NULL;
+if ((*buf)[r - 1] == '\n')
+	{
+(*buf)[r - 1] = '\0'; /* remove trailing newline */
+	r--;
 }
-
-/* read from the file descriptor int to buff */
-bytes_read = read(data->file_descriptor, &buff, BUFFER_SIZE - 1);
-if (bytes_read == 0)
-return (-1);
-
-/* split lines for \n or ; */
-i = 0;
-do {
-array_commands[i] = str_duplicate(_strtok(i ? NULL : buff, "\n;"));
-/*checks and split for && and || operators*/
-i = check_logic_ops(array_commands, i, array_operators);
-} while (array_commands[i++]);
-}
-
-/*obtains the next command (command 0) and remove it for the array*/
-data->input_line = array_commands[0];
-for (i = 0; array_commands[i]; i++)
+info->linecount_flag = 1;
+remove_comments(*buf);
+build_history_list(info, *buf, info->histcount++);
+/* if (_strchr(*buf, ';')) is this a command chain? */
 {
-array_commands[i] = array_commands[i + 1];
-array_operators[i] = array_operators[i + 1];
+*len = r;
+info->cmd_buf = buf;
 }
-return (str_length(data->input_line));
 }
-
+}
+return (r);
+}
 
 /**
-* check_logic_ops - checks and split for && and || operators
-* @array_commands: array of the commands.
-* @i: index in the array_commands to be checked
-* @array_operators: array of the logical operators for each previous command
-*
-* Return: index of the last command in the array_commands.
-*/
-int check_logic_ops(char *array_commands[], int i, char array_operators[])
+ * get_input - gets a line minus the newline
+ * @info: parameter struct
+ *
+ * Return: bytes read
+ */
+ssize_t get_input(info_t *info)
 {
-char *temp = NULL;
-int j;
+static char *buf; /* the ';' command chain buffer */
+static size_t i, j, len;
+ssize_t r = 0;
+char **buf_p = &(info->arg), *p;
 
-/* checks for the & char in the command line*/
-for (j = 0; array_commands[i] != NULL  && array_commands[i][j]; j++)
+_putchar(BUF_FLUSH);
+r = input_buf(info, &buf, &len);
+if (r == -1) /* EOF */
+return (-1);
+if (len)	/* we have commands left in the chain buffer */
 {
-if (array_commands[i][j] == '&' && array_commands[i][j + 1] == '&')
+j = i; /* init new iterator to current buf position */
+p = buf + i; /* get pointer for return */
+check_chain(info, buf, &j, i, len);
+while (j < len) /* iterate to semicolon or end */
 {
-/* split the line when chars && was found */
-temp = array_commands[i];
-array_commands[i][j] = '\0';
-array_commands[i] = str_duplicate(array_commands[i]);
-array_commands[i + 1] = str_duplicate(temp + j + 2);
-i++;
-array_operators[i] = '&';
-free(temp);
-j = 0;
+if (is_chain(info, buf, &j))
+break;
+j++;
 }
-if (array_commands[i][j] == '|' && array_commands[i][j + 1] == '|')
+
+i = j + 1; /* increment past nulled ';'' */
+if (i >= len) /* reached end of buffer? */
 {
-/* split the line when chars || was found */
-temp = array_commands[i];
-array_commands[i][j] = '\0';
-array_commands[i] = str_duplicate(array_commands[i]);
-array_commands[i + 1] = str_duplicate(temp + j + 2);
-i++;
-array_operators[i] = '|';
-free(temp);
-j = 0;
+i = len = 0; /* reset position and length */
+info->cmd_buf_type = CMD_NORM;
 }
+
+*buf_p = p; /* pass back pointer to current command position */
+return (_strlen(p)); /* return length of current command */
 }
-return (i);
+
+*buf_p = buf; /* else not a chain, pass back buffer from _getline() */
+return (r); /* return length of buffer from _getline() */
+}
+
+/**
+ * read_buf - reads a buffer
+ * @info: parameter struct
+ * @buf: buffer
+ * @i: size
+ *
+ * Return: r
+ */
+ssize_t read_buf(info_t *info, char *buf, size_t *i)
+{
+ssize_t r = 0;
+
+if (*i)
+return (0);
+r = read(info->readfd, buf, READ_BUF_SIZE);
+if (r >= 0)
+*i = r;
+return (r);
+}
+
+/**
+ * _getline - gets the next line of input from STDIN
+ * @info: parameter struct
+ * @ptr: address of pointer to buffer, preallocated or NULL
+ * @length: size of preallocated ptr buffer if not NULL
+ *
+ * Return: s
+ */
+int _getline(info_t *info, char **ptr, size_t *length)
+{
+static char buf[READ_BUF_SIZE];
+static size_t i, len;
+size_t k;
+ssize_t r = 0, s = 0;
+char *p = NULL, *new_p = NULL, *c;
+
+p = *ptr;
+if (p && length)
+s = *length;
+if (i == len)
+i = len = 0;
+
+r = read_buf(info, buf, &len);
+if (r == -1 || (r == 0 && len == 0))
+return (-1);
+
+c = _strchr(buf + i, '\n');
+k = c ? 1 + (unsigned int)(c - buf) : len;
+new_p = _realloc(p, s, s ? s + k : k + 1);
+if (!new_p) /* MALLOC FAILURE! */
+return (p ? free(p), -1 : -1);
+
+if (s)
+_strncat(new_p, buf + i, k - i);
+else
+_strncpy(new_p, buf + i, k - i + 1);
+
+s += k - i;
+i = k;
+p = new_p;
+
+if (length)
+*length = s;
+*ptr = p;
+return (s);
+}
+
+/**
+ * sigintHandler - blocks ctrl-C
+ * @sig_num: the signal number
+ *
+ * Return: void
+ */
+void sigintHandler(__attribute__((unused))int sig_num)
+{
+_puts("\n");
+_puts("$ ");
+_putchar(BUF_FLUSH);
 }

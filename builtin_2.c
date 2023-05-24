@@ -1,160 +1,114 @@
 #include "shell.h"
 
 /**
- * builtin_exit - exit of the program with the status
- * @data: struct for the program's data
- * Return: zero if sucess, or other number if its declared in the arguments
+ * _myhistory - displays the history list, one command by line, preceded
+ *              with line numbers, starting at 0.
+ * @info: Structure containing potential arguments. Used to maintain
+ *        constant function prototype.
+ *  Return: Always 0
  */
-int builtin_exit(data_of_program *data)
+int _myhistory(info_t *info)
 {
-int i;
-
-if (data->tokens[1] != NULL)
-{/*if exists arg for exit, check if is a number*/
-for (i = 0; data->tokens[1][i]; i++)
-if ((data->tokens[1][i] < '0' || data->tokens[1][i] > '9')
-&& data->tokens[1][i] != '+')
-{
-/*if is not a number*/
-errno = 2;
-return (2);
-}
-errno = _atoi(data->tokens[1]);
-}
-free_all_data(data);
-exit(errno);
-}
-
-/**
- * builtin_cd - change the current directory
- * @data: struct for the program's data
- * Return: zero if sucess, or other number if its declared in the arguments
- */
-int builtin_cd(data_of_program *data)
-{
-char *dir_home = env_get_key("HOME", data), *dir_old = NULL;
-char old_dir[128] = {0};
-int error_code = 0;
-
-if (data->tokens[1])
-{
-if (str_compare(data->tokens[1], "-", 0))
-{
-dir_old = env_get_key("OLDPWD", data);
-if (dir_old)
-error_code = set_work_directory(data, dir_old);
-_print(env_get_key("PWD", data));
-_print("\n");
-
-return (error_code);
-}
-else
-{
-return (set_work_directory(data, data->tokens[1]));
-}
-}
-else
-{
-if (!dir_home)
-dir_home = getcwd(old_dir, 128);
-
-return (set_work_directory(data, dir_home));
-}
+	print_list(info->history);
 return (0);
 }
 
 /**
- * set_work_directory - set the work directory
- * @data: struct for the program's data
- * @new_dir: path to be set as work directory
- * Return: zero if sucess, or other number if its declared in the arguments
+ * unset_alias - sets alias to string
+ * @info: parameter struct
+ * @str: the string alias
+ *
+ * Return: Always 0 on success, 1 on error
  */
-int set_work_directory(data_of_program *data, char *new_dir)
+int unset_alias(info_t *info, char *str)
 {
-char old_dir[128] = {0};
-int err_code = 0;
+char *p, c;
+int ret;
 
-getcwd(old_dir, 128);
-
-if (!str_compare(old_dir, new_dir, 0))
-{
-err_code = chdir(new_dir);
-if (err_code == -1)
-{
-errno = 2;
-return (3);
-}
-env_set_key("PWD", new_dir, data);
-}
-env_set_key("OLDPWD", old_dir, data);
-return (0);
+p = _strchr(str, '=');
+if (!p)
+return (1);
+c = *p;
+*p = 0;
+ret = delete_node_at_index(&(info->alias),
+get_node_index(info->alias, node_starts_with(info->alias, str, -1)));
+*p = c;
+return (ret);
 }
 
 /**
- * builtin_help - shows the environment where the shell runs
- * @data: struct for the program's data
- * Return: zero if sucess, or other number if its declared in the arguments
+ * set_alias - sets alias to string
+ * @info: parameter struct
+ * @str: the string alias
+ *
+ * Return: Always 0 on success, 1 on error
  */
-int builtin_help(data_of_program *data)
+int set_alias(info_t *info, char *str)
 {
-int i, length = 0;
-char *mensajes[6] = {NULL};
+char *p;
 
-mensajes[0] = HELP_MSG;
+p = _strchr(str, '=');
+if (!p)
+return (1);
+if (!*++p)
+return (unset_alias(info, str));
 
-/* validate args */
-if (data->tokens[1] == NULL)
+unset_alias(info, str);
+return (add_node_end(&(info->alias), str, 0) == NULL);
+}
+
+/**
+ * print_alias - prints an alias string
+ * @node: the alias node
+ *
+ * Return: Always 0 on success, 1 on error
+ */
+int print_alias(list_t *node)
 {
-_print(mensajes[0] + 6);
+char *p = NULL, *a = NULL;
+
+if (node)
+{
+p = _strchr(node->str, '=');
+for (a = node->str; a <= p; a++)
+_putchar(*a);
+_putchar('\'');
+_puts(p + 1);
+_puts("'\n");
+return (0);
+}
 return (1);
 }
-if (data->tokens[2] != NULL)
-{
-errno = E2BIG;
-perror(data->command_name);
-return (5);
-}
-mensajes[1] = HELP_EXIT_MSG;
-mensajes[2] = HELP_ENV_MSG;
-mensajes[3] = HELP_SETENV_MSG;
-mensajes[4] = HELP_UNSETENV_MSG;
-mensajes[5] = HELP_CD_MSG;
-for (i = 0; mensajes[i]; i++)
-{
-/*print the length of string */
-length = str_length(data->tokens[1]);
-if (str_compare(data->tokens[1], mensajes[i], length))
-{
-_print(mensajes[i] + length + 1);
-return (1);
-}
-}
-/*if there is no match, print error and return -1 */
-errno = EINVAL;
-perror(data->command_name);
-return (0);
-}
 
 /**
- * builtin_alias - add, remove or show aliases
- * @data: struct for the program's data
- * Return: zero if sucess, or other number if its declared in the arguments
+ * _myalias - mimics the alias builtin (man alias)
+ * @info: Structure containing potential arguments. Used to maintain
+ *          constant function prototype.
+ *  Return: Always 0
  */
-int builtin_alias(data_of_program *data)
+int _myalias(info_t *info)
 {
 int i = 0;
+char *p = NULL;
+list_t *node = NULL;
 
-/* if there are no arguments, print all environment */
-if (data->tokens[1] == NULL)
-return (print_alias(data, NULL));
-
-while (data->tokens[++i])
+if (info->argc == 1)
 {
-/* if there are arguments, set or print each env variable*/
-if (count_characters(data->tokens[i], "="))
-set_alias(data->tokens[i], data);
+node = info->alias;
+while (node)
+{
+print_alias(node);
+node = node->next;
+}
+return (0);
+}
+for (i = 1; info->argv[i]; i++)
+{
+p = _strchr(info->argv[i], '=');
+if (p)
+set_alias(info, info->argv[i]);
 else
-print_alias(data, data->tokens[i]);
+print_alias(node_starts_with(info->alias, info->argv[i], '='));
 }
 
 return (0);

@@ -1,122 +1,160 @@
 #include "shell.h"
-/**
- * main - initialize the variables of the program
- * @argc: number of values received from the command line
- * @argv: values received from the command line
- * @env: number of values received from the command line
- * Return: zero on succes.
- */
-int main(int argc, char *argv[], char *env[])
-{
-data_of_program data_struct = {NULL}, *data = &data_struct;
-char *prompt = "";
-
-inicialize_data(data, argc, argv, env);
-
-signal(SIGINT, handle_ctrl_c);
-
-if (isatty(STDIN_FILENO) && isatty(STDOUT_FILENO) && argc == 1)
-{
-/* We are in the terminal, interactive mode */
-errno = 2;/*???????*/
-prompt = PROMPT_MSG;
-}
-errno = 0;
-sisifo(prompt, data);
-return (0);
-}
 
 /**
- * handle_ctrl_c - print the prompt in a new line
- * when the signal SIGINT (ctrl + c) is send to the program
- * @UNUSED: option of the prototype
+ * hsh - main shell loop
+ * @info: the parameter & return info struct
+ * @av: the argument vector from main()
+ *
+ * Return: 0 on success, 1 on error, or error code
  */
-void handle_ctrl_c(int opr UNUSED)
+int hsh(info_t *info, char **av)
 {
-_print("\n");
-_print(PROMPT_MSG);
+ssize_t r = 0;
+int builtin_ret = 0;
+
+while (r != -1 && builtin_ret != -2)
+{
+clear_info(info);
+if (interactive(info))
+_puts("$ ");
+_eputchar(BUF_FLUSH);
+r = get_input(info);
+if (r != -1)
+{
+set_info(info, av);
+builtin_ret = find_builtin(info);
+if (builtin_ret == -1)
+find_cmd(info);
+}
+else if (interactive(info))
+_putchar('\n');
+free_info(info, 0);
+}
+write_history(info);
+free_info(info, 1);
+if (!interactive(info) && info->status)
+exit(info->status);
+if (builtin_ret == -2)
+{
+if (info->err_num == -1)
+exit(info->status);
+exit(info->err_num);
+}
+return (builtin_ret);
 }
 
 /**
- * inicialize_data - inicialize the struct with the info of the program
- * @data: pointer to the structure of data
- * @argv: array of arguments pased to the program execution
- * @env: environ pased to the program execution
- * @argc: number of values received from the command line
+ * find_builtin - finds a builtin command
+ * @info: the parameter & return info struct
+ *
+ * Return: -1 if builtin not found,
+ *			0 if builtin executed successfully,
+ *			1 if builtin found but not successful,
+ *			-2 if builtin signals exit()
  */
-void inicialize_data(data_of_program *data, int argc, char *argv[], char **env)
+int find_builtin(info_t *info)
 {
-int i = 0;
+int i, built_in_ret = -1;
+builtin_table builtintbl[] = {
+{"exit", _myexit},
+{"env", _myenv},
+{"help", _myhelp},
+{"history", _myhistory},
+{"setenv", _mysetenv},
+{"unsetenv", _myunsetenv},
+{"cd", _mycd},
+{"alias", _myalias},
+{NULL, NULL}
+};
 
-data->program_name = argv[0];
-data->input_line = NULL;
-data->command_name = NULL;
-data->exec_counter = 0;
-/* define the file descriptor to be readed*/
-if (argc == 1)
-data->file_descriptor = STDIN_FILENO;
+for (i = 0; builtintbl[i].type; i++)
+if (_strcmp(info->argv[0], builtintbl[i].type) == 0)
+{
+info->line_count++;
+built_in_ret = builtintbl[i].func(info);
+break;
+}
+return (built_in_ret);
+}
+
+/**
+ * find_cmd - finds a command in PATH
+ * @info: the parameter & return info struct
+ *
+ * Return: void
+ */
+void find_cmd(info_t *info)
+{
+char *path = NULL;
+int i, k;
+
+info->path = info->argv[0];
+if (info->linecount_flag == 1)
+{
+info->line_count++;
+info->linecount_flag = 0;
+}
+for (i = 0, k = 0; info->arg[i]; i++)
+if (!is_delim(info->arg[i], " \t\n"))
+k++;
+if (!k)
+return;
+
+path = find_path(info, _getenv(info, "PATH="), info->argv[0]);
+if (path)
+{
+info->path = path;
+fork_cmd(info);
+}
 else
 {
-data->file_descriptor = open(argv[1], O_RDONLY);
-if (data->file_descriptor == -1)
+if ((interactive(info) || _getenv(info, "PATH=")
+|| info->argv[0][0] == '/') && is_cmd(info, info->argv[0]))
+fork_cmd(info);
+else if (*(info->arg) != '\n')
 {
-_printe(data->program_name);
-_printe(": 0: Can't open ");
-_printe(argv[1]);
-_printe("\n");
-exit(127);
+info->status = 127;
+print_error(info, "not found\n");
 }
 }
-data->tokens = NULL;
-data->env = malloc(sizeof(char *) * 50);
-if (env)
-{
-for (; env[i]; i++)
-{
-data->env[i] = str_duplicate(env[i]);
 }
-}
-data->env[i] = NULL;
-env = data->env;
 
-data->alias_list = malloc(sizeof(char *) * 20);
-for (i = 0; i < 20; i++)
-{
-data->alias_list[i] = NULL;
-}
-}
 /**
- * sisifo - its a infinite loop that shows the prompt
- * @prompt: prompt to be printed
- * @data: its a infinite loop that shows the prompt
+ * fork_cmd - forks a an exec thread to run cmd
+ * @info: the parameter & return info struct
+ *
+ * Return: void
  */
-void sisifo(char *prompt, data_of_program *data)
+void fork_cmd(info_t *info)
 {
-int error_code = 0, string_len = 0;
+pid_t child_pid;
 
-while (++(data->exec_counter))
+child_pid = fork();
+if (child_pid == -1)
 {
-_print(prompt);
-error_code = string_len = _getline(data);
-
-if (error_code == EOF)
-{
-free_all_data(data);
-exit(errno); /* if EOF is the fisrt Char of string, exit*/
+/* TODO: PUT ERROR FUNCTION */
+perror("Error:");
+return;
 }
-if (string_len >= 1)
+if (child_pid == 0)
 {
-expand_alias(data);
-expand_variables(data);
-tokenize(data);
-if (data->tokens[0])
+if (execve(info->path, info->argv, get_environ(info)) == -1)
 {
-/* if a text is given to prompt, execute */
-error_code = execute(data);
-if (error_code != 0)
-_print_error(error_code, data);
+free_info(info, 1);
+if (errno == EACCES)
+exit(126);
+exit(1);
 }
-free_recurrent_data(data);
+/* TODO: PUT ERROR FUNCTION */
 }
+else
+{
+wait(&(info->status));
+if (WIFEXITED(info->status))
+{
+info->status = WEXITSTATUS(info->status);
+if (info->status == 126)
+print_error(info, "Permission denied\n");
+		}
 }
 }
