@@ -1,76 +1,96 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <unistd.h>
-#include <sys/wait.h>
-
-#define MAXLINE 80
+#include "shell.h"
 
 /**
- * main - simple UNIX command line interpreter
- *
- * Return: EXIT_SUCCESS on success, EXIT_FAILURE on failure
+ * builtin_env - shows the environment where the shell runs
+ * @data: struct for the program's data
+ * Return: zero if sucess, or other number if its declared in the arguments
  */
-int main(void)
+int builtin_env(data_of_program *data)
 {
-char *args[MAXLINE / 2 + 1];
-int should_run = 1;
-char *line = NULL;
-size_t len = 0;
-ssize_t read;
-extern char **environ;
-int i = 0;
-pid_t pid;
+int i;
+char cpname[50] = {'\0'};
+char *var_copy = NULL;
 
-while (should_run)
+/* if not arguments */
+if (data->tokens[1] == NULL)
+print_environ(data);
+else
 {
-printf("simple_shell> ");
-fflush(stdout);
+for (i = 0; data->tokens[1][i]; i++)
+{
+/* checks if exists a char = */
+if (data->tokens[1][i] == '=')
+{
+/* checks if exists a var with the same name and change its value*/
+/* temporally */
+var_copy = str_duplicate(env_get_key(cpname, data));
+if (var_copy != NULL)
+env_set_key(cpname, data->tokens[1] + i + 1, data);
 
-read = getline(&line, &len, stdin);
-if (read == -1)
+/* print the environ */
+print_environ(data);
+if (env_get_key(cpname, data) == NULL)
 {
-perror("getline");
-exit(EXIT_FAILURE);
-}
-
-i = 0;
-args[i] = strtok(line, " \n");
-while (args[i] != NULL)
-{
-i++;
-args[i] = strtok(NULL, " \n");
-}
-if (strcmp(args[0], "exit") == 0)
-{
-should_run = 0;
-continue;
-}
-else if (strcmp(args[0], "env") == 0)
-{
-for (i = 0; environ[i] != NULL; i++)
-{
-printf("%s\n", environ[i]);
-}
-continue;
-}
-pid = fork();
-if (pid == -1)
-{
-perror("fork");
-exit(EXIT_FAILURE);
-}
-else if (pid == 0)
-{
-execvp(args[0], args);
-perror("execvp");
-exit(EXIT_FAILURE);
+/* print the variable if it does not exist in the environ */
+_print(data->tokens[1]);
+_print("\n");
 }
 else
 {
-wait(NULL);
+/* returns the old value of the var*/
+env_set_key(cpname, var_copy, data);
+free(var_copy);
 }
+return (0);
 }
-free(line);
-exit(EXIT_SUCCESS);
+cpname[i] = data->tokens[1][i];
+}
+errno = 2;
+perror(data->command_name);
+errno = 127;
+}
+return (0);
+}
+
+/**
+ * builtin_set_env - ..
+ * @data: struct for the program's data
+ * Return: zero if sucess, or other number if its declared in the arguments
+ */
+int builtin_set_env(data_of_program *data)
+{
+/* validate args */
+if (data->tokens[1] == NULL || data->tokens[2] == NULL)
+return (0);
+if (data->tokens[3] != NULL)
+{
+errno = E2BIG;
+perror(data->command_name);
+return (5);
+}
+
+env_set_key(data->tokens[1], data->tokens[2], data);
+
+return (0);
+}
+
+/**
+ * builtin_unset_env - ..
+ * @data: struct for the program's data'
+ * Return: ..
+ */
+int builtin_unset_env(data_of_program *data)
+{
+/* validate args */
+if (data->tokens[1] == NULL)
+return (0);
+if (data->tokens[2] != NULL)
+{
+errno = E2BIG;
+perror(data->command_name);
+return (5);
+}
+env_remove_key(data->tokens[1], data);
+
+return (0);
 }
